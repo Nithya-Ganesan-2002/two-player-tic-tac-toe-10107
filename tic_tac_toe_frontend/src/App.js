@@ -1,10 +1,11 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import './App.css';
 
 /**
  * Tic Tac Toe Frontend
  * - Interactive 3x3 board
  * - Two-player local gameplay (X and O)
+ * - Single-player vs AI mode (toggleable)
  * - Win/draw detection with visual highlight
  * - Reset game button
  * - Visual feedback for current player turn
@@ -52,15 +53,111 @@ function isBoardFull(squares) {
   return squares.every((v) => v !== null);
 }
 
+/**
+ * Get list of empty indices.
+ * @param {Array<string|null>} squares
+ * @returns {number[]}
+ */
+function getAvailableMoves(squares) {
+  const res = [];
+  for (let i = 0; i < squares.length; i++) {
+    if (!squares[i]) res.push(i);
+  }
+  return res;
+}
+
+/**
+ * Try to find a move that results in a win for the given player.
+ * @param {Array<string|null>} squares
+ * @param {'X'|'O'} player
+ * @returns {number|null}
+ */
+function findWinningMove(squares, player) {
+  for (const [a, b, c] of LINES) {
+    const line = [squares[a], squares[b], squares[c]];
+    const countPlayer = line.filter((v) => v === player).length;
+    const countEmpty = line.filter((v) => v === null).length;
+    if (countPlayer === 2 && countEmpty === 1) {
+      if (!squares[a]) return a;
+      if (!squares[b]) return b;
+      if (!squares[c]) return c;
+    }
+  }
+  return null;
+}
+
+/**
+ * Basic AI move selection:
+ * 1) Win if possible
+ * 2) Block opponent's immediate win
+ * 3) Take center if free
+ * 4) Take a corner if free
+ * 5) Otherwise take any available move
+ * @param {Array<string|null>} squares
+ * @param {'X'|'O'} aiMark
+ * @returns {number|null}
+ */
+function chooseAiMove(squares, aiMark) {
+  const humanMark = aiMark === 'X' ? 'O' : 'X';
+
+  // 1) Try to win
+  const winningMove = findWinningMove(squares, aiMark);
+  if (winningMove !== null) return winningMove;
+
+  // 2) Block human if they can win next
+  const blockMove = findWinningMove(squares, humanMark);
+  if (blockMove !== null) return blockMove;
+
+  // 3) Take center
+  if (squares[4] === null) return 4;
+
+  // 4) Take a corner
+  const corners = [0, 2, 6, 8].filter((i) => squares[i] === null);
+  if (corners.length) return corners[Math.floor(Math.random() * corners.length)];
+
+  // 5) Any move
+  const options = getAvailableMoves(squares);
+  if (options.length) return options[Math.floor(Math.random() * options.length)];
+
+  return null;
+}
+
 // PUBLIC_INTERFACE
 export default function App() {
   /** Game state */
   const [squares, setSquares] = useState(EMPTY_BOARD);
   const [xIsNext, setXIsNext] = useState(true);
 
+  /** Mode: false => Two Players, true => Player vs AI (Player is X, AI is O) */
+  const [vsAI, setVsAI] = useState(false);
+
   // Derived state
   const { winner, line } = useMemo(() => calculateWinner(squares), [squares]);
   const draw = useMemo(() => !winner && isBoardFull(squares), [winner, squares]);
+
+  // When in AI mode and it's AI's turn, make an AI move automatically
+  useEffect(() => {
+    if (!vsAI) return;              // only in AI mode
+    if (winner || draw) return;     // stop if game over
+    if (xIsNext) return;            // AI is 'O' and plays on O's turn
+
+    // Slight delay to feel natural
+    const t = setTimeout(() => {
+      setSquares((prev) => {
+        // Double-check within updater in case of rapid changes
+        const { winner: w } = calculateWinner(prev);
+        if (w) return prev;
+        const idx = chooseAiMove(prev, 'O');
+        if (idx === null || prev[idx]) return prev;
+        const copy = prev.slice();
+        copy[idx] = 'O';
+        return copy;
+      });
+      setXIsNext(true);
+    }, 350);
+
+    return () => clearTimeout(t);
+  }, [vsAI, xIsNext, winner, draw]);
 
   // PUBLIC_INTERFACE
   function handleSquareClick(index) {
@@ -70,11 +167,21 @@ export default function App() {
     const next = squares.slice();
     next[index] = xIsNext ? 'X' : 'O';
     setSquares(next);
+
+    // In AI mode: if human (X) just moved, toggle to AI; otherwise normal toggle
     setXIsNext(!xIsNext);
   }
 
   // PUBLIC_INTERFACE
   function resetGame() {
+    setSquares(EMPTY_BOARD);
+    setXIsNext(true);
+  }
+
+  // PUBLIC_INTERFACE
+  function toggleMode() {
+    // Switching modes resets the game for clarity
+    setVsAI((prev) => !prev);
     setSquares(EMPTY_BOARD);
     setXIsNext(true);
   }
@@ -100,17 +207,23 @@ export default function App() {
           <span className={`badge ${winner ? 'badge-accent' : xIsNext ? 'badge-primary' : 'badge-secondary'}`}>
             {xIsNext && !winner && !draw ? (xIsNext ? 'X' : 'O') : winner ? '🏆' : '•'}
           </span>
-          <span className="status-text">{statusText}</span>
+          <span className="status-text">
+            {statusText} {vsAI ? '(vs AI)' : '(2 Players)'}
+          </span>
         </div>
 
         <Board
           squares={squares}
           onClick={handleSquareClick}
           winningLine={line}
-          disabled={!!winner}
+          // Disable only when the game is over or when it's AI's turn in AI mode
+          disabled={!!winner || (vsAI && !xIsNext)}
         />
 
-        <div className="ttt-controls">
+        <div className="ttt-controls" style={{ gap: 10, flexWrap: 'wrap' }}>
+          <button className="btn" onClick={toggleMode} aria-label="Toggle game mode">
+            {vsAI ? 'Switch to 2 Players' : 'Play vs AI'}
+          </button>
           <button className="btn btn-reset" onClick={resetGame} aria-label="Reset game">
             Reset Game
           </button>
@@ -119,10 +232,10 @@ export default function App() {
         <footer className="ttt-footer">
           <span className="legend">
             <span className="legend-item">
-              <span className="legend-swatch swatch-x">X</span> Player X
+              <span className="legend-swatch swatch-x">X</span> {vsAI ? 'You' : 'Player X'}
             </span>
             <span className="legend-item">
-              <span className="legend-swatch swatch-o">O</span> Player O
+              <span className="legend-swatch swatch-o">O</span> {vsAI ? 'AI' : 'Player O'}
             </span>
           </span>
         </footer>
@@ -175,8 +288,9 @@ function Square({ value, onClick, isWinning, disabled, ariaLabel }) {
       onClick={onClick}
       disabled={disabled}
       aria-label={ariaLabel}
+      data-content={value || ''}
     >
-      {value}
+      {/* Using CSS :after to render data-content keeps layout consistent */}
     </button>
   );
 }
