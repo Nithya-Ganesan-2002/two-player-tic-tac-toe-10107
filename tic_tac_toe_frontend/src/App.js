@@ -1,10 +1,11 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import './App.css';
 
 /**
  * Tic Tac Toe Frontend
  * - Interactive 3x3 board
  * - Two-player local gameplay (X and O)
+ * - Optional AI opponent with simple rule-based strategy
  * - Win/draw detection with visual highlight
  * - Reset game button
  * - Visual feedback for current player turn
@@ -52,23 +53,110 @@ function isBoardFull(squares) {
   return squares.every((v) => v !== null);
 }
 
+/**
+ * Try to find a winning move for the given player.
+ * Returns index or null.
+ */
+function findWinningMove(squares, player) {
+  for (const [a, b, c] of LINES) {
+    const line = [squares[a], squares[b], squares[c]];
+    const emptyCount = line.filter((v) => v === null).length;
+    const playerCount = line.filter((v) => v === player).length;
+    if (emptyCount === 1 && playerCount === 2) {
+      if (squares[a] === null) return a;
+      if (squares[b] === null) return b;
+      if (squares[c] === null) return c;
+    }
+  }
+  return null;
+}
+
+/**
+ * Choose a reasonable AI move:
+ * 1) Win if possible
+ * 2) Block opponent's win
+ * 3) Take center
+ * 4) Take a corner
+ * 5) Take any side
+ */
+function chooseAiMove(squares, aiPlayer) {
+  const human = aiPlayer === 'X' ? 'O' : 'X';
+
+  // 1) Win
+  const winIdx = findWinningMove(squares, aiPlayer);
+  if (winIdx !== null) return winIdx;
+
+  // 2) Block
+  const blockIdx = findWinningMove(squares, human);
+  if (blockIdx !== null) return blockIdx;
+
+  // 3) Center
+  if (squares[4] === null) return 4;
+
+  // 4) Corners
+  const corners = [0, 2, 6, 8].filter((i) => squares[i] === null);
+  if (corners.length) return corners[Math.floor(Math.random() * corners.length)];
+
+  // 5) Sides
+  const sides = [1, 3, 5, 7].filter((i) => squares[i] === null);
+  if (sides.length) return sides[Math.floor(Math.random() * sides.length)];
+
+  return null;
+}
+
 // PUBLIC_INTERFACE
 export default function App() {
   /** Game state */
   const [squares, setSquares] = useState(EMPTY_BOARD);
   const [xIsNext, setXIsNext] = useState(true);
 
+  /** Opponent mode: 'human' or 'ai' */
+  const [opponent, setOpponent] = useState('human');
+  /** Which symbol does the AI play when enabled. Default AI = 'O' so user starts as 'X'. */
+  const [aiPlays, setAiPlays] = useState('O');
+
   // Derived state
   const { winner, line } = useMemo(() => calculateWinner(squares), [squares]);
   const draw = useMemo(() => !winner && isBoardFull(squares), [winner, squares]);
 
+  // Trigger AI move when:
+  // - opponent is AI
+  // - game not over
+  // - it's AI's turn
+  useEffect(() => {
+    if (opponent !== 'ai') return;
+    if (winner || draw) return;
+
+    const currentPlayer = xIsNext ? 'X' : 'O';
+    if (currentPlayer !== aiPlays) return;
+
+    // Slight delay for UX
+    const timer = setTimeout(() => {
+      const move = chooseAiMove(squares, aiPlays);
+      if (move !== null && squares[move] === null) {
+        const next = squares.slice();
+        next[move] = aiPlays;
+        setSquares(next);
+        setXIsNext(!xIsNext);
+      }
+    }, 300);
+
+    return () => clearTimeout(timer);
+  }, [opponent, winner, draw, xIsNext, aiPlays, squares]);
+
   // PUBLIC_INTERFACE
   function handleSquareClick(index) {
     // Ignore clicks if occupied or game over
-    if (squares[index] || winner) return;
+    if (squares[index] || winner || draw) return;
+
+    const currentPlayer = xIsNext ? 'X' : 'O';
+    // In AI mode, block clicking when it's AI's turn
+    if (opponent === 'ai' && currentPlayer === aiPlays) {
+      return;
+    }
 
     const next = squares.slice();
-    next[index] = xIsNext ? 'X' : 'O';
+    next[index] = currentPlayer;
     setSquares(next);
     setXIsNext(!xIsNext);
   }
@@ -79,11 +167,32 @@ export default function App() {
     setXIsNext(true);
   }
 
+  // PUBLIC_INTERFACE
+  function handleOpponentChange(e) {
+    const mode = e.target.value;
+    setOpponent(mode);
+    // Reset when switching modes for clarity
+    setSquares(EMPTY_BOARD);
+    setXIsNext(true);
+  }
+
+  // PUBLIC_INTERFACE
+  function handleAiSideChange(e) {
+    const side = e.target.value; // 'X' or 'O'
+    setAiPlays(side);
+    // Reset game when changing AI side
+    setSquares(EMPTY_BOARD);
+    setXIsNext(true);
+  }
+
+  const currentTurn = xIsNext ? 'X' : 'O';
+  const isAiTurn = opponent === 'ai' && currentTurn === aiPlays;
+
   const statusText = winner
     ? `Winner: ${winner}`
     : draw
     ? 'Draw!'
-    : `Current Turn: ${xIsNext ? 'X' : 'O'}`;
+    : `Current Turn: ${currentTurn}${opponent === 'ai' ? currentTurn === aiPlays ? ' (AI)' : ' (You)' : ''}`;
 
   return (
     <div className="ttt-app">
@@ -92,13 +201,48 @@ export default function App() {
           Tic Tac Toe
         </h1>
 
+        {/* Opponent selector */}
+        <div className="ttt-controls" style={{ marginBottom: 12, gap: 8 }}>
+          <label htmlFor="opponent" style={{ fontWeight: 600, color: 'var(--color-muted)' }}>
+            Opponent:
+          </label>
+          <select
+            id="opponent"
+            value={opponent}
+            onChange={handleOpponentChange}
+            className="btn"
+            aria-label="Select opponent type"
+          >
+            <option value="human">Local Human</option>
+            <option value="ai">Computer (AI)</option>
+          </select>
+
+          {opponent === 'ai' && (
+            <>
+              <label htmlFor="aiSide" style={{ fontWeight: 600, color: 'var(--color-muted)', marginLeft: 8 }}>
+                AI plays:
+              </label>
+              <select
+                id="aiSide"
+                value={aiPlays}
+                onChange={handleAiSideChange}
+                className="btn"
+                aria-label="Select AI side"
+              >
+                <option value="X">X (AI starts)</option>
+                <option value="O">O (You start)</option>
+              </select>
+            </>
+          )}
+        </div>
+
         <div
           className={`ttt-status ${winner ? 'ttt-status-win' : draw ? 'ttt-status-draw' : ''}`}
           role="status"
           aria-live="polite"
         >
-          <span className={`badge ${winner ? 'badge-accent' : xIsNext ? 'badge-primary' : 'badge-secondary'}`}>
-            {xIsNext && !winner && !draw ? (xIsNext ? 'X' : 'O') : winner ? '🏆' : '•'}
+            <span className={`badge ${winner ? 'badge-accent' : xIsNext ? 'badge-primary' : 'badge-secondary'}`}>
+            {winner ? '🏆' : isAiTurn ? '🤖' : '🎮'}
           </span>
           <span className="status-text">{statusText}</span>
         </div>
@@ -107,7 +251,7 @@ export default function App() {
           squares={squares}
           onClick={handleSquareClick}
           winningLine={line}
-          disabled={!!winner}
+          disabled={!!winner || !!draw || isAiTurn}
         />
 
         <div className="ttt-controls">
